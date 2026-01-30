@@ -8,10 +8,12 @@ import (
 )
 
 type Result struct {
-	URL   string
-	Data  string
-	Error error
-	Size  int
+	URL      string
+	Data     string
+	Error    error
+	Size     int
+	WorkerId int
+	Duration time.Duration
 }
 
 func main() {
@@ -22,74 +24,87 @@ func main() {
 		"https://httpbin.org/robots.txt",
 		"https://httpbin.org/user-agent",
 	}
-	sequentialScrape(urls)
-	concurrentScrape(urls)
+	fmt.Println("\n no limit")
+	scrapeWithWorkers(urls, 0) // 0 = no limit
+
+	fmt.Println("\n3 workers ")
+	scrapeWithWorkers(urls, 3)
+
+	fmt.Println("\n 5 workers ")
+	scrapeWithWorkers(urls, 5)
 }
 
-func sequentialScrape(urls []string) {
+func scrapeWithWorkers(urls []string, maxWorkers int) {
 	start := time.Now()
 
-	for _, url := range urls {
-		_, size, err := fetchURL(url)
-		if err != nil {
-			fmt.Printf("Error fetchin %s: %v\n", url, err)
-		}
-		fmt.Printf("%s - %d bytes\n", url, size)
-	}
-
-	elapsed := time.Since(start)
-	fmt.Printf("Took %v time\n", elapsed)
-}
-
-func concurrentScrape(urls []string) {
-	start := time.Now()
-
+	jobs := make(chan string, len(urls))
 	results := make(chan Result, len(urls))
 
+	if maxWorkers == 0 {
+		maxWorkers = len(urls)
+	}
 	var wg sync.WaitGroup
+	for i := range maxWorkers {
+		wg.Add(1)
+		go worker(i, jobs, results, &wg)
+	}
 
 	for _, url := range urls {
-
-		wg.Add(1)
-		go func(u string) {
-			defer wg.Done()
-
-			data, size, err := fetchURL(u)
-			results <- Result{
-				URL:   u,
-				Data:  data,
-				Size:  size,
-				Error: err,
-			}
-		}(url)
+		jobs <- url
 	}
+	close(jobs)
 
 	go func() {
 		wg.Wait()
 		close(results)
 	}()
 
-	for res := range results {
-		if res.Error != nil {
-			fmt.Printf("Error fetchin %s: %v\n", res.URL, res.Error)
+	success := 0
+	failure := 0
+	for result := range results {
+		if result.Error != nil {
+			fmt.Printf("Worker %v failed: %v %v\n", result.WorkerId, result.URL, result.Error)
+			failure++
+		} else {
+			fmt.Printf("Worker %v succeded: %v %v\n", result.WorkerId, result.URL, result.Duration.Milliseconds())
+			success++
 		}
-		fmt.Printf("%s - %d bytes\n", res.URL, res.Size)
 	}
-	fmt.Printf("Concurent took %v time\n", time.Since(start))
+	fmt.Printf("%v succeded, %v failed, took %v seconds", time.Since(start).Seconds())
+}
+
+func worker(id int, jobs <-chan string, results chan<- Result, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	for url := range jobs {
+		start := time.Now()
+		data, size, err := fetchURL(url)
+		duration := time.Since(start)
+
+		results <- Result{
+			WorkerId: id,
+			URL:      url,
+			Data:     data,
+			Error:    err,
+			Size:     size,
+			Duration: duration,
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func fetchURL(url string) (string, int, error) {
-	client := &http.Client{
+	client := http.Client{
 		Timeout: 10 * time.Second,
 	}
+
 	resp, err := client.Get(url)
 	if err != nil {
 		return "", 0, err
 	}
 	defer resp.Body.Close()
-
 	body := make([]byte, 1024*1024)
 	n, _ := resp.Body.Read(body)
-
 	return string(body[:n]), n, nil
 }
