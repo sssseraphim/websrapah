@@ -7,15 +7,6 @@ import (
 	"time"
 )
 
-type Result struct {
-	URL      string
-	Data     string
-	Error    error
-	Size     int
-	WorkerId int
-	Duration time.Duration
-}
-
 func main() {
 	urls := []string{
 		"https://httpbin.org/html",
@@ -70,7 +61,7 @@ func scrapeWithWorkers(urls []string, maxWorkers int) {
 			success++
 		}
 	}
-	fmt.Printf("%v succeded, %v failed, took %v seconds", time.Since(start).Seconds())
+	fmt.Printf("%v succeded, %v failed, took %v seconds", success, failure, time.Since(start).Seconds())
 }
 
 func worker(id int, jobs <-chan string, results chan<- Result, wg *sync.WaitGroup) {
