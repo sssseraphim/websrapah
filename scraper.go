@@ -72,8 +72,12 @@ func (s *Scraper) ScrapeURLsWithContext(ctx context.Context, urls []string) []Re
 	var wg sync.WaitGroup
 
 	for i := range s.config.MaxWorkers {
-		wg.Add(1)
-		go s.worker(ctx, i, jobChan, resultChan, &wg)
+		wg.Go(func() {
+			workerRes := s.worker(ctx, i, jobChan)
+			for res := range workerRes {
+				resultChan <- res
+			}
+		})
 	}
 
 	go func() {
@@ -107,38 +111,40 @@ func (s *Scraper) ScrapeURLsWithContext(ctx context.Context, urls []string) []Re
 
 }
 
-func (s *Scraper) worker(ctx context.Context, id int, jobs <-chan string, results chan<- Result, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	for url := range jobs {
-		if s.config.RateLimit > 0 {
-			time.Sleep(s.config.RateLimit)
-		}
-
-		var result Result
-		for attempt := range s.config.MaxRetries {
-			result = s.fetchURL(url)
-			result.WorkerId = id
-			result.Retries = attempt
-			result.Timestamp = time.Now()
-			if result.Error == nil {
-				break
+func (s *Scraper) worker(ctx context.Context, id int, jobs <-chan string) <-chan Result {
+	results := make(chan Result)
+	go func() {
+		defer close(results)
+		for url := range jobs {
+			if s.config.RateLimit > 0 {
+				time.Sleep(s.config.RateLimit)
 			}
 
-			if attempt < s.config.MaxRetries {
-				backoff := time.Duration(attempt+1) * time.Second
-				select {
-				case <-time.After(backoff):
-					continue
-				case <-ctx.Done():
-					result.Error = ctx.Err()
+			var result Result
+			for attempt := range s.config.MaxRetries {
+				result = s.fetchURL(url)
+				result.WorkerId = id
+				result.Retries = attempt
+				result.Timestamp = time.Now()
+				if result.Error == nil {
 					break
+				}
 
+				if attempt < s.config.MaxRetries {
+					backoff := time.Duration(attempt+1) * time.Second
+					select {
+					case <-time.After(backoff):
+						continue
+					case <-ctx.Done():
+						result.Error = ctx.Err()
+						break
+					}
 				}
 			}
+			results <- result
 		}
-
-	}
+	}()
+	return results
 }
 
 func (s *Scraper) fetchURL(url string) Result {

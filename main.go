@@ -43,6 +43,6 @@ func main() {
 
 	stats := scraper.GetStats()
 	fmt.Println("Took time: ", elapsed)
-	fmt.Println(stats)
+	fmt.Printf("%+v\n", stats)
 
 }
